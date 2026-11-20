@@ -34,10 +34,12 @@
 #include <drm/drm_device.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_modeset_helper.h>
+#include <drm/drm_plane_helper.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 #include <drm/radeon_drm.h>
@@ -626,6 +628,11 @@ radeon_crtc_set_config(struct drm_mode_set *set,
 	struct drm_crtc *crtc;
 	bool active = false;
 	int ret;
+#ifdef __sparc64__
+	const unsigned char *p;
+	uint16_t *r, *g, *b;
+	int i;
+#endif
 
 	if (!set || !set->crtc)
 		return -EINVAL;
@@ -639,6 +646,26 @@ radeon_crtc_set_config(struct drm_mode_set *set,
 	}
 
 	ret = drm_crtc_helper_set_config(set, ctx);
+
+#ifdef __sparc64__
+	/* When returning from X, we may need to restore the colour table. */
+	if (ret == 0 && set->fb &&
+	    set->fb->format->format == DRM_FORMAT_C8) {
+		if (dev->fb_helper && set->fb == dev->fb_helper->fb) {
+			p = rasops_cmap;
+			r = set->crtc->gamma_store;
+			g = r + set->crtc->gamma_size;
+			b = g + set->crtc->gamma_size;
+
+			for (i = 0; i < 256; i++) {
+				r[i] = *p++ << 8;
+				g[i] = *p++ << 8;
+				b[i] = *p++ << 8;
+			}
+			radeon_crtc_load_lut(set->crtc);
+		}
+	}
+#endif
 
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head)
 		if (crtc->enabled)
@@ -678,10 +705,69 @@ static const struct drm_crtc_funcs radeon_crtc_funcs = {
 	.get_vblank_timestamp = drm_crtc_vblank_helper_get_vblank_timestamp,
 };
 
+/*
+ * Sun firmware typically selects an indexed pixel format for its console.
+ * drm_crtc_init() advertises only 32-bit formats, so fbdev rejects C8
+ * despite driver support.  Add C8 for fbdev.
+ */
+#ifdef __sparc64__
+static const uint32_t sparc_fmt[3] = {
+	DRM_FORMAT_XRGB8888,
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_C8
+};
+
+/*
+ * The primary DRM plane scans out the framebuffer to the display.  We will
+ * use this modesetting operation since we just need the 8bit C8 pixel
+ * format to be compatible with the Sun firmware.
+ */
+static const struct drm_plane_funcs sparc_plane_funcs = {
+	DRM_PLANE_NON_ATOMIC_FUNCS,
+};
+
+static int
+radeon_crtc_init_indexed(struct drm_device *dev, struct drm_crtc *crtc)
+{
+	struct drm_plane *primary;
+	int ret;
+
+	primary = __drm_universal_plane_alloc(
+	    dev,
+	    sizeof(*primary),
+	    0,
+	    0,
+	    &sparc_plane_funcs,
+	    sparc_fmt,
+	    ARRAY_SIZE(sparc_fmt),
+	    NULL,
+	    DRM_PLANE_TYPE_PRIMARY,
+	    NULL);
+	if (IS_ERR(primary))
+		return PTR_ERR(primary);
+
+	/* Incomplete pixel format list */
+	primary->format_default = true;
+	ret = drm_crtc_init_with_planes(
+	    dev,
+	    crtc,
+	    primary,
+	    NULL,
+	    &radeon_crtc_funcs,
+	    NULL);
+	if (ret != 0) {
+		drm_plane_cleanup(primary);
+		kfree(primary);
+	}
+	return ret;
+}
+#endif
+
 static void radeon_crtc_init(struct drm_device *dev, int index)
 {
 	struct radeon_device *rdev = dev->dev_private;
 	struct radeon_crtc *radeon_crtc;
+	int ret;
 
 	radeon_crtc = kzalloc(sizeof(*radeon_crtc), GFP_KERNEL);
 	if (radeon_crtc == NULL)
@@ -693,7 +779,17 @@ static void radeon_crtc_init(struct drm_device *dev, int index)
 		return;
 	}
 
-	drm_crtc_init(dev, &radeon_crtc->base, &radeon_crtc_funcs);
+	/* Advertise C8 for the SPARC console preference. */
+#ifdef __sparc64__
+	ret = radeon_crtc_init_indexed(dev, &radeon_crtc->base);
+#else
+	ret = drm_crtc_init(dev, &radeon_crtc->base, &radeon_crtc_funcs);
+#endif
+	if (ret != 0) {
+		destroy_workqueue(radeon_crtc->flip_queue);
+		kfree(radeon_crtc);
+		return;
+	}
 
 	drm_mode_crtc_set_gamma_size(&radeon_crtc->base, 256);
 	radeon_crtc->crtc_id = index;

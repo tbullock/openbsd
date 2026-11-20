@@ -1259,6 +1259,15 @@ radeondrm_attachhook(struct device *self)
 	else
 		format = NULL;
 
+	/*
+	 * If the firmware uses an 8bit console, keep that pixel format when
+	 * setting up the new KMS framebuffer.
+	 */
+#ifdef __sparc64__
+	if (rdev->sf.sf_depth == 8)
+		format = drm_format_info(DRM_FORMAT_C8);
+#endif
+
 	drm_client_setup(dev, format);
 
 	if (ri->ri_bits == NULL)
