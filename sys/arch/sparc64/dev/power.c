@@ -128,7 +128,7 @@ power_intr(void *vsc)
 {
 	extern int allowpowerdown;
 
-	if (allowpowerdown == 1) {
+	if (allowpowerdown == 1 && initprocess != NULL) {
 		allowpowerdown = 0;
 		prsignal(initprocess, SIGUSR2);
 	}
