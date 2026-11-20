@@ -64,14 +64,11 @@ rasops32_init(struct rasops_info *ri)
 int
 rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 {
-	int width, height, step, cnt, fs, b, f;
-	uint32_t fb, clr[2];
+	int width, height, step, cnt, fs, first_high;
+	uint32_t fb, clr[2], b, f;
 	struct rasops_info *ri;
-	int64_t *rp;
-	union {
-		int64_t q[4];
-		int32_t d[4][2];
-	} u;
+	uint64_t *rp;
+	uint64_t q[4];
 	u_char *fr;
 
 	ri = (struct rasops_info *)cookie;
@@ -85,7 +82,7 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		return 0;
 #endif
 
-	rp = (int64_t *)(ri->ri_bits + row*ri->ri_yscale + col*ri->ri_xscale);
+	rp = (uint64_t *)(ri->ri_bits + row*ri->ri_yscale + col*ri->ri_xscale);
 
 	height = ri->ri_font->fontheight;
 	width = ri->ri_font->fontwidth;
@@ -93,16 +90,29 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 
 	b = ri->ri_devcmap[(attr >> 16) & 0xf];
 	f = ri->ri_devcmap[(attr >> 24) & 0xf];
-	u.d[0][0] = b; u.d[0][1] = b;
-	u.d[1][0] = b; u.d[1][1] = f;
-	u.d[2][0] = f; u.d[2][1] = b;
-	u.d[3][0] = f; u.d[3][1] = f;
+	/* Each table entry contains the colours for two adjacent pixels. */
+	q[0] = (uint64_t)b << 32 | b;
+	q[3] = (uint64_t)f << 32 | f;
+
+	/* A byte swapped framebuffer reverses the two pixels together. */
+	first_high = BYTE_ORDER == BIG_ENDIAN;
+#if NRASOPS_BSWAP > 0
+	if (ri->ri_flg & RI_BSWAP)
+		first_high = !first_high;
+#endif
+	if (first_high) {
+		q[1] = (uint64_t)b << 32 | f;
+		q[2] = (uint64_t)f << 32 | b;
+	} else {
+		q[1] = (uint64_t)f << 32 | b;
+		q[2] = (uint64_t)b << 32 | f;
+	}
 
 	if (uc == ' ') {
 		while (height--) {
 			/* the general, pixel-at-a-time case is fast enough */
 			for (cnt = 0; cnt < width; cnt++)
-				((int *)rp)[cnt] = b;
+				((uint32_t *)rp)[cnt] = b;
 			rp += step;
 		}
 	} else {
@@ -115,9 +125,9 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		case 6:
 			while (height--) {
 				fb = fr[0];
-				rp[0] = u.q[fb >> 6];
-				rp[1] = u.q[(fb >> 4) & 3];
-				rp[2] = u.q[(fb >> 2) & 3];
+				rp[0] = q[fb >> 6];
+				rp[1] = q[(fb >> 4) & 3];
+				rp[2] = q[(fb >> 2) & 3];
 				rp += step;
 				fr += 1;
 			}
@@ -126,10 +136,10 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		case 8:
 			while (height--) {
 				fb = fr[0];
-				rp[0] = u.q[fb >> 6];
-				rp[1] = u.q[(fb >> 4) & 3];
-				rp[2] = u.q[(fb >> 2) & 3];
-				rp[3] = u.q[fb & 3];
+				rp[0] = q[fb >> 6];
+				rp[1] = q[(fb >> 4) & 3];
+				rp[2] = q[(fb >> 2) & 3];
+				rp[3] = q[fb & 3];
 				rp += step;
 				fr += 1;
 			}
@@ -138,13 +148,13 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		case 12:
 			while (height--) {
 				fb = fr[0];
-				rp[0] = u.q[fb >> 6];
-				rp[1] = u.q[(fb >> 4) & 3];
-				rp[2] = u.q[(fb >> 2) & 3];
-				rp[3] = u.q[fb & 3];
+				rp[0] = q[fb >> 6];
+				rp[1] = q[(fb >> 4) & 3];
+				rp[2] = q[(fb >> 2) & 3];
+				rp[3] = q[fb & 3];
 				fb = fr[1];
-				rp[4] = u.q[fb >> 6];
-				rp[5] = u.q[(fb >> 4) & 3];
+				rp[4] = q[fb >> 6];
+				rp[5] = q[(fb >> 4) & 3];
 				rp += step;
 				fr += 2;
 			}
@@ -153,15 +163,15 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		case 16:
 			while (height--) {
 				fb = fr[0];
-				rp[0] = u.q[fb >> 6];
-				rp[1] = u.q[(fb >> 4) & 3];
-				rp[2] = u.q[(fb >> 2) & 3];
-				rp[3] = u.q[fb & 3];
+				rp[0] = q[fb >> 6];
+				rp[1] = q[(fb >> 4) & 3];
+				rp[2] = q[(fb >> 2) & 3];
+				rp[3] = q[fb & 3];
 				fb = fr[1];
-				rp[4] = u.q[fb >> 6];
-				rp[5] = u.q[(fb >> 4) & 3];
-				rp[6] = u.q[(fb >> 2) & 3];
-				rp[7] = u.q[fb & 3];
+				rp[4] = q[fb >> 6];
+				rp[5] = q[(fb >> 4) & 3];
+				rp[6] = q[(fb >> 2) & 3];
+				rp[7] = q[fb & 3];
 				rp += step;
 				fr += 2;
 			}
@@ -170,25 +180,25 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 		case 32:
 			while (height--) {
 				fb = fr[0];
-				rp[0] = u.q[fb >> 6];
-				rp[1] = u.q[(fb >> 4) & 3];
-				rp[2] = u.q[(fb >> 2) & 3];
-				rp[3] = u.q[fb & 3];
+				rp[0] = q[fb >> 6];
+				rp[1] = q[(fb >> 4) & 3];
+				rp[2] = q[(fb >> 2) & 3];
+				rp[3] = q[fb & 3];
 				fb = fr[1];
-				rp[4] = u.q[fb >> 6];
-				rp[5] = u.q[(fb >> 4) & 3];
-				rp[6] = u.q[(fb >> 2) & 3];
-				rp[7] = u.q[fb & 3];
+				rp[4] = q[fb >> 6];
+				rp[5] = q[(fb >> 4) & 3];
+				rp[6] = q[(fb >> 2) & 3];
+				rp[7] = q[fb & 3];
 				fb = fr[2];
-				rp[8] = u.q[fb >> 6];
-				rp[9] = u.q[(fb >> 4) & 3];
-				rp[10] = u.q[(fb >> 2) & 3];
-				rp[11] = u.q[fb & 3];
+				rp[8] = q[fb >> 6];
+				rp[9] = q[(fb >> 4) & 3];
+				rp[10] = q[(fb >> 2) & 3];
+				rp[11] = q[fb & 3];
 				fb = fr[3];
-				rp[12] = u.q[fb >> 6];
-				rp[13] = u.q[(fb >> 4) & 3];
-				rp[14] = u.q[(fb >> 2) & 3];
-				rp[15] = u.q[fb & 3];
+				rp[12] = q[fb >> 6];
+				rp[13] = q[(fb >> 4) & 3];
+				rp[14] = q[(fb >> 2) & 3];
+				rp[15] = q[fb & 3];
 				rp += step;
 				fr += 4;
 			}
@@ -204,7 +214,7 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 				fr += fs;
 
 				for (cnt = 0; cnt < width; cnt++) {
-					((int *)rp)[cnt] = clr[fb >> 31];
+					((uint32_t *)rp)[cnt] = clr[fb >> 31];
 					fb <<= 1;
 				}
 				rp += step;
@@ -217,7 +227,7 @@ rasops32_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 	if ((attr & WSATTR_UNDERLINE) != 0) {
 		rp -= step;
 		for (cnt = 0; cnt < width; cnt++)
-			((int *)rp)[cnt] = f;
+			((uint32_t *)rp)[cnt] = f;
 	}
 
 	return 0;
