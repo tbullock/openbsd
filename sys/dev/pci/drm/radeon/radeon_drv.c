@@ -743,9 +743,6 @@ int radeondrm_show_screen(void *, void *, int,
     void (*)(void *, int, int), void *);
 void radeondrm_doswitch(void *);
 void radeondrm_enter_ddb(void *, void *);
-#ifdef __sparc64__
-void radeondrm_setcolor(void *, u_int, u_int8_t, u_int8_t, u_int8_t);
-#endif
 void radeondrm_setpal(struct radeon_device *, struct rasops_info *);
 
 struct wsscreen_descr radeondrm_stdscreen = {
@@ -864,11 +861,7 @@ radeondrm_doswitch(void *v)
 	struct radeon_device *rdev = ri->ri_hw;
 
 	rasops_show_screen(ri, rdev->switchcookie, 0, NULL, NULL);
-#ifdef __sparc64__
-	fbwscons_setcolormap(&rdev->sf, radeondrm_setcolor);
-#else
 	radeondrm_setpal(rdev, ri);
-#endif
 	drm_fb_helper_restore_fbdev_mode_unlocked(rdev_to_drm(rdev)->fb_helper,
 	    false);
 
@@ -889,25 +882,6 @@ radeondrm_enter_ddb(void *v, void *cookie)
 	rasops_show_screen(ri, cookie, 0, NULL, NULL);
 	drm_fb_helper_debug_enter(fb_helper->info);
 }
-
-#ifdef __sparc64__
-void
-radeondrm_setcolor(void *v, u_int index, u_int8_t r, u_int8_t g, u_int8_t b)
-{
-	struct sunfb *sf = v;
-	struct radeon_device *rdev = sf->sf_ro.ri_hw;
-
-	/* see legacy_crtc_load_lut() */
-	if (rdev->family < CHIP_RS600) {
-		WREG8(RADEON_PALETTE_INDEX, index);
-		WREG32(RADEON_PALETTE_30_DATA,
-		    (r << 22) | (g << 12) | (b << 2));
-	} else {
-		printf("%s: setcolor family %d not handled\n",
-		    rdev->self.dv_xname, rdev->family);
-	}
-}
-#endif
 
 void
 radeondrm_setpal(struct radeon_device *rdev, struct rasops_info *ri)
@@ -1169,7 +1143,10 @@ radeondrm_attach_kms(struct device *parent, struct device *self, void *aux)
 	ri->ri_hw = rdev;
 	ri->ri_updatecursor = NULL;
 
-	fbwscons_init(&rdev->sf, RI_VCONS | RI_WRONLY | RI_BSWAP, console);
+	/*
+	 * Keep the early Sun firmware console until DRM allocates its own buffer.
+	 */
+	fbwscons_init(&rdev->sf, RI_BSWAP, console);
 	if (console)
 		fbwscons_console_init(&rdev->sf, -1);
 }
@@ -1287,16 +1264,21 @@ radeondrm_attachhook(struct device *self)
 	if (ri->ri_bits == NULL)
 		return;
 
-#ifdef __sparc64__
-	fbwscons_setcolormap(&rdev->sf, radeondrm_setcolor);
-	ri = &rdev->sf.sf_ro;
-#else
 	radeondrm_setpal(rdev, ri);
 	ri->ri_flg = RI_CENTER | RI_VCONS | RI_WRONLY;
+	/*
+	 * Centre the firmware text geometry in the new KMS mode.  Avoid
+	 * RI_FULLCLEAR during normal operation so erases stay inside the
+	 * text area; clear the margins once below with the console colour.
+	 */
+#ifdef __sparc64__
+	ri->ri_flg |= RI_BSWAP;
+	rasops_init(ri, rdev->sf.sf_ro.ri_rows, rdev->sf.sf_ro.ri_cols);
+#else
 	rasops_init(ri, 160, 160);
+#endif
 
 	ri->ri_hw = rdev;
-#endif
 
 	radeondrm_stdscreen.capabilities = ri->ri_caps;
 	radeondrm_stdscreen.nrows = ri->ri_rows;
@@ -1316,6 +1298,15 @@ radeondrm_attachhook(struct device *self)
 		uint32_t defattr;
 
 		ri->ri_ops.pack_attr(ri->ri_active, 0, 0, 0, &defattr);
+#ifdef __sparc64__
+		/*
+		 * Rasops has no full framebuffer clear, so use this workaround
+		 * to clear the margins too.
+		 */
+		ri->ri_flg |= RI_FULLCLEAR;
+		ri->ri_ops.eraserows(ri->ri_active, 0, ri->ri_rows, defattr);
+		ri->ri_flg &= ~RI_FULLCLEAR;
+#endif
 		wsdisplay_cnattach(&radeondrm_stdscreen, ri->ri_active,
 		    ri->ri_ccol, ri->ri_crow, defattr);
 	}
