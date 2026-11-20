@@ -50,6 +50,7 @@ void	rasops8_makestamp(struct rasops_info *ri, uint32_t);
  */
 static int32_t	stamp[16];
 static uint32_t	stamp_attr;
+static struct rasops_info *stamp_ri;
 static int	stamp_mutex;	/* XXX see note in README */
 #endif
 
@@ -170,6 +171,7 @@ rasops8_makestamp(struct rasops_info *ri, uint32_t attr)
 	fg = ri->ri_devcmap[(attr >> 24) & 0xf] & 0xff;
 	bg = ri->ri_devcmap[(attr >> 16) & 0xf] & 0xff;
 	stamp_attr = attr;
+	stamp_ri = ri;
 
 	for (i = 0; i < 16; i++) {
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -222,7 +224,7 @@ rasops8_putchar8(void *cookie, int row, int col, u_int uc, uint32_t attr)
 #endif
 
 	/* Recompute stamp? */
-	if (attr != stamp_attr)
+	if (ri != stamp_ri || attr != stamp_attr)
 		rasops8_makestamp(ri, attr);
 
 	rp = (int32_t *)(ri->ri_bits + row*ri->ri_yscale + col*ri->ri_xscale);
@@ -290,7 +292,7 @@ rasops8_putchar12(void *cookie, int row, int col, u_int uc, uint32_t attr)
 #endif
 
 	/* Recompute stamp? */
-	if (attr != stamp_attr)
+	if (ri != stamp_ri || attr != stamp_attr)
 		rasops8_makestamp(ri, attr);
 
 	rp = (int32_t *)(ri->ri_bits + row*ri->ri_yscale + col*ri->ri_xscale);
@@ -361,7 +363,7 @@ rasops8_putchar16(void *cookie, int row, int col, u_int uc, uint32_t attr)
 #endif
 
 	/* Recompute stamp? */
-	if (attr != stamp_attr)
+	if (ri != stamp_ri || attr != stamp_attr)
 		rasops8_makestamp(ri, attr);
 
 	rp = (int32_t *)(ri->ri_bits + row*ri->ri_yscale + col*ri->ri_xscale);
